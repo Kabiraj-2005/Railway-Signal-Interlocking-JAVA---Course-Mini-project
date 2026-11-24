@@ -1,0 +1,17 @@
+-- Railway Interlocking — Two-Platform Demo Station
+--
+--               T3 (loop platform)
+--           /----------------------\
+--  T1 ---- P1 ------ T2 (main) ----- P2 ---- T4
+--  [SIG_W]                                [SIG_E]
+--
+-- Track sections: T1, T2, T3, T4
+-- Points:         P1, P2
+-- Signals:        SIG_W, SIG_E
+-- Routes:
+--   R1 West->Main (T1, T2; P1 normal)
+--   R2 West->Loop (T1, T3; P1 reverse)
+--   R3 East->Main (T4, T2; P2 normal)
+--   R4 East->Loop (T4, T3; P2 reverse)
+
+-- Harsh: CREATE TABLE statements go here
