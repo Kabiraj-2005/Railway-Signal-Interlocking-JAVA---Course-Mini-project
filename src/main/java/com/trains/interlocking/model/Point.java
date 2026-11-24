@@ -1,53 +1,61 @@
+/*
+ * Point.java
+ * A set of movable rails that sends a train either to the main line (NORMAL)
+ * or to the loop (REVERSE). A locked point refuses to move.
+ * Lecture decks: Inheritance, Method Overriding, Exception Handling (throws).
+ * Owner: Utpal
+ */
 package com.trains.interlocking.model;
 
 import com.trains.interlocking.exception.PointLockedException;
 
-/**
- * A set of movable rails that switches a train between two tracks.
- * Normal leads to the main line, reverse leads to the loop.
- */
 public class Point extends TrackElement {
 
     private static final long serialVersionUID = 1L;
 
-    /** false = normal, true = reverse. */
-    private boolean reversed;
+    private boolean reversed; // false = NORMAL, true = REVERSE
 
     public Point(String id) {
         super(id);
+    }
+
+    public Point(String id, boolean reversed, boolean locked) {
+        super(id, locked);
+        this.reversed = reversed;
     }
 
     public boolean isReversed() {
         return reversed;
     }
 
-    /**
-     * Moves the point.
-     *
-     * @throws PointLockedException if the point is locked by a route and would have to move
-     */
-    public void setReversed(boolean reversed) throws PointLockedException {
-        if (this.reversed == reversed) {
-            return;
+    public void setReversed(boolean newPosition) throws PointLockedException {
+        // Staying in the same position is always safe, even when locked.
+        if (newPosition != reversed && isLocked()) {
+            throw new PointLockedException("Point " + getId() + " is locked and cannot move");
         }
-        if (isLocked()) {
-            throw new PointLockedException("Point " + getId() + " is locked in "
-                    + positionName(this.reversed) + " and cannot move to " + positionName(reversed));
-        }
-        this.reversed = reversed;
+        reversed = newPosition;
     }
 
     public static String positionName(boolean reversed) {
-        return reversed ? "REVERSE" : "NORMAL";
-    }
-
-    @Override
-    public String getType() {
-        return "Point";
+        if (reversed) {
+            return "REVERSE";
+        }
+        return "NORMAL";
     }
 
     @Override
     public String getStatus() {
-        return positionName(reversed) + ", " + lockText();
+        if (isLocked()) {
+            return positionName(reversed) + ", locked";
+        }
+        return positionName(reversed);
+    }
+
+    @Override
+    public String getDisplayColour() {
+        if (isLocked()) {
+            return "#fdd835"; // yellow
+        }
+        return "#bdbdbd"; // grey
     }
 }

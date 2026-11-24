@@ -1,35 +1,30 @@
+/*
+ * EventLogEntry.java
+ * One line of the event log: when it happened, which route, what kind of action
+ * (SET, MOVE, REFUSED ...) and a message. Stored in the event_log table.
+ * Lecture decks: Classes and Objects, Date/Time API (LocalDateTime).
+ * Owner: Utpal
+ */
 package com.trains.interlocking.model;
 
-import java.io.Serializable;
 import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
 
-/**
- * One line of the interlocking event log (route set, train moved, request refused ...).
- */
-public class EventLogEntry implements Serializable {
+public class EventLogEntry {
 
-    private static final long serialVersionUID = 1L;
-    private static final DateTimeFormatter FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
-
-    private final LocalDateTime timestamp;
+    private final LocalDateTime time;
     private final String routeId;
     private final String action;
     private final String message;
 
-    public EventLogEntry(LocalDateTime timestamp, String routeId, String action, String message) {
-        this.timestamp = timestamp;
-        this.routeId = routeId == null ? "" : routeId;
+    public EventLogEntry(LocalDateTime time, String routeId, String action, String message) {
+        this.time = time;
+        this.routeId = routeId;
         this.action = action;
         this.message = message;
     }
 
-    public LocalDateTime getTimestamp() {
-        return timestamp;
-    }
-
-    public String getTimestampText() {
-        return timestamp.format(FORMAT);
+    public LocalDateTime getTime() {
+        return time;
     }
 
     public String getRouteId() {
@@ -46,6 +41,7 @@ public class EventLogEntry implements Serializable {
 
     @Override
     public String toString() {
-        return getTimestampText() + " [" + action + "] " + routeId + " " + message;
+        // The time is created without nanoseconds, so this prints e.g. 2026-11-24T16:46:13
+        return time + "  " + action + "  " + routeId + "  " + message;
     }
 }

@@ -1,3 +1,11 @@
+/*
+ * StationStore.java
+ * An interface describing "somewhere the station can be saved". The service only
+ * knows this interface; the database class StationRepository implements it.
+ * This keeps the interlocking rules separate from SQL.
+ * Lecture decks: Interfaces, JDBC (SQLException).
+ * Owner: Utpal
+ */
 package com.trains.interlocking.service;
 
 import com.trains.interlocking.model.EventLogEntry;
@@ -5,17 +13,11 @@ import com.trains.interlocking.model.Route;
 import com.trains.interlocking.model.TrackElement;
 
 import java.sql.SQLException;
-import java.util.Collection;
+import java.util.List;
 
-/**
- * Where the interlocking persists its state. Implemented by the database layer
- * ({@code dao.StationRepository}); the service also works without one (in-memory only).
- */
 public interface StationStore {
 
-    /** Saves the current state of every element and route. */
-    void saveState(Collection<TrackElement> elements, Collection<Route> routes) throws SQLException;
+    void saveState(List<TrackElement> elements, List<Route> routes) throws SQLException;
 
-    /** Appends one entry to the persistent event log. */
     void logEvent(EventLogEntry entry) throws SQLException;
 }

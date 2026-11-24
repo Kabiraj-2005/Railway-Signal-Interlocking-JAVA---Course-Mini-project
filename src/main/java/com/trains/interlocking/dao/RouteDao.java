@@ -1,3 +1,11 @@
+/*
+ * RouteDao.java
+ * Loads routes from three tables (route, route_section, route_point) and saves a
+ * route's state (active flag and train position). A route is built from the SAME
+ * section, point and signal objects that are already in the layout map.
+ * Lecture decks: JDBC (PreparedStatement, ResultSet), DAO pattern, Collections, casting.
+ * Owner: Harsh
+ */
 package com.trains.interlocking.dao;
 
 import com.trains.interlocking.model.Point;
@@ -13,211 +21,86 @@ import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 
-/**
- * JDBC DAO for routes ({@code route}, {@code route_section}, {@code route_point}).
- * Routes reference layout elements, so the DAO needs the already-loaded layout to
- * resolve ids into objects. Multi-table writes run in a transaction.
- */
 public class RouteDao implements Dao<Route> {
 
     private final Connection conn;
-    private final Map<String, TrackElement> layout;
+    private final HashMap<String, TrackElement> layout; // to turn ids into objects
 
-    public RouteDao(Connection conn, Map<String, TrackElement> layout) {
+    public RouteDao(Connection conn, HashMap<String, TrackElement> layout) {
         this.conn = conn;
         this.layout = layout;
     }
 
     @Override
-    public void save(Route r) throws SQLException {
-        boolean ownTx = beginIfNeeded();
-        try {
-            try (PreparedStatement ps = conn.prepareStatement(
-                    "INSERT INTO route (id, description, entry_signal_id, active, train_position) VALUES (?, ?, ?, ?, ?)")) {
-                ps.setString(1, r.getId());
-                ps.setString(2, r.getDescription());
-                ps.setString(3, r.getEntrySignal().getId());
-                ps.setInt(4, r.isActive() ? 1 : 0);
-                ps.setInt(5, r.getTrainPosition());
-                ps.executeUpdate();
+    public List<Route> findAll() throws SQLException {
+        List<Route> routes = new ArrayList<>();
+        try (PreparedStatement ps = conn.prepareStatement("SELECT * FROM route ORDER BY id");
+             ResultSet rs = ps.executeQuery()) {
+            while (rs.next()) {
+                String id = rs.getString("id");
+                Signal signal = (Signal) layout.get(rs.getString("entry_signal_id"));
+                Route route = new Route(id, rs.getString("description"), signal,
+                        loadSections(id), loadPoints(id));
+                route.setActive(rs.getInt("active") == 1);
+                route.setTrainPosition(rs.getInt("train_position"));
+                routes.add(route);
             }
-            insertChildren(r);
-            commitIfOwn(ownTx);
-        } catch (SQLException e) {
-            rollbackIfOwn(ownTx);
-            throw e;
         }
+        return routes;
     }
 
     @Override
     public Optional<Route> findById(String id) throws SQLException {
-        try (PreparedStatement ps = conn.prepareStatement("SELECT * FROM route WHERE id = ?")) {
-            ps.setString(1, id);
-            try (ResultSet rs = ps.executeQuery()) {
-                return rs.next() ? Optional.of(map(rs)) : Optional.empty();
+        // There are only four routes, so searching the full list is simplest.
+        for (Route route : findAll()) {
+            if (route.getId().equals(id)) {
+                return Optional.of(route);
             }
         }
+        return Optional.empty();
     }
 
+    /** Saves only the run-time state; the route's path never changes. */
     @Override
-    public List<Route> findAll() throws SQLException {
-        List<Route> list = new ArrayList<>();
-        try (PreparedStatement ps = conn.prepareStatement("SELECT * FROM route ORDER BY id");
-             ResultSet rs = ps.executeQuery()) {
-            while (rs.next()) {
-                list.add(map(rs));
-            }
-        }
-        return list;
-    }
-
-    @Override
-    public void update(Route r) throws SQLException {
-        boolean ownTx = beginIfNeeded();
-        try {
-            try (PreparedStatement ps = conn.prepareStatement(
-                    "UPDATE route SET description = ?, entry_signal_id = ?, active = ?, train_position = ? WHERE id = ?")) {
-                ps.setString(1, r.getDescription());
-                ps.setString(2, r.getEntrySignal().getId());
-                ps.setInt(3, r.isActive() ? 1 : 0);
-                ps.setInt(4, r.getTrainPosition());
-                ps.setString(5, r.getId());
-                if (ps.executeUpdate() == 0) {
-                    throw new SQLException("No route with id " + r.getId());
-                }
-            }
-            deleteChildren(r.getId());
-            insertChildren(r);
-            commitIfOwn(ownTx);
-        } catch (SQLException e) {
-            rollbackIfOwn(ownTx);
-            throw e;
-        }
-    }
-
-    /** Updates only the run-time state (active flag and train position). */
-    public void updateState(Route r) throws SQLException {
+    public void update(Route route) throws SQLException {
         try (PreparedStatement ps = conn.prepareStatement(
                 "UPDATE route SET active = ?, train_position = ? WHERE id = ?")) {
-            ps.setInt(1, r.isActive() ? 1 : 0);
-            ps.setInt(2, r.getTrainPosition());
-            ps.setString(3, r.getId());
+            ps.setInt(1, route.isActive() ? 1 : 0);
+            ps.setInt(2, route.getTrainPosition());
+            ps.setString(3, route.getId());
             ps.executeUpdate();
         }
     }
 
-    @Override
-    public void delete(String id) throws SQLException {
-        boolean ownTx = beginIfNeeded();
-        try {
-            deleteChildren(id);
-            try (PreparedStatement ps = conn.prepareStatement("DELETE FROM route WHERE id = ?")) {
-                ps.setString(1, id);
-                ps.executeUpdate();
-            }
-            commitIfOwn(ownTx);
-        } catch (SQLException e) {
-            rollbackIfOwn(ownTx);
-            throw e;
-        }
-    }
-
-    private Route map(ResultSet rs) throws SQLException {
-        String id = rs.getString("id");
-        Signal signal = lookup(rs.getString("entry_signal_id"), Signal.class);
-
-        List<TrackSection> sections = new ArrayList<>();
+    private ArrayList<TrackSection> loadSections(String routeId) throws SQLException {
+        ArrayList<TrackSection> sections = new ArrayList<>();
+        // ORDER BY position: the train must run over the sections in the right order.
         try (PreparedStatement ps = conn.prepareStatement(
-                "SELECT section_id FROM route_section WHERE route_id = ? ORDER BY seq")) {
-            ps.setString(1, id);
-            try (ResultSet srs = ps.executeQuery()) {
-                while (srs.next()) {
-                    sections.add(lookup(srs.getString("section_id"), TrackSection.class));
+                "SELECT section_id FROM route_section WHERE route_id = ? ORDER BY position")) {
+            ps.setString(1, routeId);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    sections.add((TrackSection) layout.get(rs.getString("section_id")));
                 }
             }
         }
+        return sections;
+    }
 
-        Map<Point, Boolean> points = new HashMap<>();
+    private HashMap<Point, Boolean> loadPoints(String routeId) throws SQLException {
+        HashMap<Point, Boolean> points = new HashMap<>();
         try (PreparedStatement ps = conn.prepareStatement(
                 "SELECT point_id, reversed FROM route_point WHERE route_id = ?")) {
-            ps.setString(1, id);
-            try (ResultSet prs = ps.executeQuery()) {
-                while (prs.next()) {
-                    points.put(lookup(prs.getString("point_id"), Point.class), prs.getInt("reversed") == 1);
+            ps.setString(1, routeId);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    Point point = (Point) layout.get(rs.getString("point_id"));
+                    points.put(point, rs.getInt("reversed") == 1);
                 }
             }
         }
-
-        Route route = new Route(id, rs.getString("description"), signal, sections, points);
-        route.setActive(rs.getInt("active") == 1);
-        route.setTrainPosition(rs.getInt("train_position"));
-        return route;
-    }
-
-    private <E extends TrackElement> E lookup(String elementId, Class<E> type) throws SQLException {
-        TrackElement e = layout.get(elementId);
-        if (!type.isInstance(e)) {
-            throw new SQLException("Layout has no " + type.getSimpleName() + " with id " + elementId);
-        }
-        return type.cast(e);
-    }
-
-    private void insertChildren(Route r) throws SQLException {
-        try (PreparedStatement ps = conn.prepareStatement(
-                "INSERT INTO route_section (route_id, seq, section_id) VALUES (?, ?, ?)")) {
-            List<TrackSection> sections = r.getSections();
-            for (int i = 0; i < sections.size(); i++) {
-                ps.setString(1, r.getId());
-                ps.setInt(2, i);
-                ps.setString(3, sections.get(i).getId());
-                ps.executeUpdate();
-            }
-        }
-        try (PreparedStatement ps = conn.prepareStatement(
-                "INSERT INTO route_point (route_id, point_id, reversed) VALUES (?, ?, ?)")) {
-            for (Map.Entry<Point, Boolean> e : r.getRequiredPointPositions().entrySet()) {
-                ps.setString(1, r.getId());
-                ps.setString(2, e.getKey().getId());
-                ps.setInt(3, e.getValue() ? 1 : 0);
-                ps.executeUpdate();
-            }
-        }
-    }
-
-    private void deleteChildren(String routeId) throws SQLException {
-        try (PreparedStatement ps = conn.prepareStatement("DELETE FROM route_section WHERE route_id = ?")) {
-            ps.setString(1, routeId);
-            ps.executeUpdate();
-        }
-        try (PreparedStatement ps = conn.prepareStatement("DELETE FROM route_point WHERE route_id = ?")) {
-            ps.setString(1, routeId);
-            ps.executeUpdate();
-        }
-    }
-
-    /** Starts a transaction unless the caller already has one open. */
-    private boolean beginIfNeeded() throws SQLException {
-        if (conn.getAutoCommit()) {
-            conn.setAutoCommit(false);
-            return true;
-        }
-        return false;
-    }
-
-    private void commitIfOwn(boolean ownTx) throws SQLException {
-        if (ownTx) {
-            conn.commit();
-            conn.setAutoCommit(true);
-        }
-    }
-
-    private void rollbackIfOwn(boolean ownTx) throws SQLException {
-        if (ownTx) {
-            conn.rollback();
-            conn.setAutoCommit(true);
-        }
+        return points;
     }
 }

@@ -1,47 +1,40 @@
+/*
+ * Route.java
+ * A path a train can take through the station: an entry signal, the sections in the
+ * order the train runs over them, and the position each point must be in.
+ * It also remembers whether it is set (active) and which section the train is in.
+ * Lecture decks: Classes and Objects, Collections (ArrayList, HashMap), Serialization.
+ * Owner: Utpal
+ */
 package com.trains.interlocking.model;
 
 import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
 
-/**
- * A path a train can be given through the station: an entry signal, the sections in the
- * order the train traverses them, and the position each point on the path must be in.
- *
- * <p>A route also carries its run-time state: whether it is set (active) and where the
- * train is. {@code trainPosition} is -1 while the train waits at the entry signal and
- * otherwise the index of the section the train currently occupies.
- */
 public class Route implements Serializable {
 
     private static final long serialVersionUID = 1L;
 
+    /** Train position meaning "no train on the route yet". */
     public static final int NO_TRAIN = -1;
 
     private final String id;
     private final String description;
     private final Signal entrySignal;
     private final ArrayList<TrackSection> sections;
-    /** true = reverse, false = normal. */
-    private final HashMap<Point, Boolean> requiredPointPositions;
+    private final HashMap<Point, Boolean> pointPositions; // true = REVERSE
 
     private boolean active;
-    private int trainPosition = NO_TRAIN;
+    private int trainPosition = NO_TRAIN; // index into sections
 
     public Route(String id, String description, Signal entrySignal,
-                 List<TrackSection> sections, Map<Point, Boolean> requiredPointPositions) {
-        this.id = Objects.requireNonNull(id, "id must not be null");
-        this.description = description == null ? "" : description;
-        this.entrySignal = Objects.requireNonNull(entrySignal, "entrySignal must not be null");
-        if (sections == null || sections.isEmpty()) {
-            throw new IllegalArgumentException("Route " + id + " needs at least one section");
-        }
-        this.sections = new ArrayList<>(sections);
-        this.requiredPointPositions = requiredPointPositions == null
-                ? new HashMap<>() : new HashMap<>(requiredPointPositions);
+                 ArrayList<TrackSection> sections, HashMap<Point, Boolean> pointPositions) {
+        this.id = id;
+        this.description = description;
+        this.entrySignal = entrySignal;
+        this.sections = sections;
+        this.pointPositions = pointPositions;
     }
 
     public String getId() {
@@ -56,48 +49,17 @@ public class Route implements Serializable {
         return entrySignal;
     }
 
-    public List<TrackSection> getSections() {
-        return new ArrayList<>(sections);
+    // The lists are returned directly: a route never changes after it is built.
+    public ArrayList<TrackSection> getSections() {
+        return sections;
     }
 
-    public Map<Point, Boolean> getRequiredPointPositions() {
-        return new HashMap<>(requiredPointPositions);
-    }
-
-    public boolean usesSection(TrackSection section) {
-        return sections.contains(section);
+    public HashMap<Point, Boolean> getPointPositions() {
+        return pointPositions;
     }
 
     public boolean usesPoint(Point point) {
-        return requiredPointPositions.containsKey(point);
-    }
-
-    /** @return the required position of the point (true = reverse), or null if not used. */
-    public Boolean requiredPosition(Point point) {
-        return requiredPointPositions.get(point);
-    }
-
-    /**
-     * Two routes conflict if they share a track section or need the same point in
-     * different positions.
-     *
-     * @return a description of the conflict, or null if the routes are compatible
-     */
-    public String conflictWith(Route other) {
-        for (TrackSection s : sections) {
-            if (other.usesSection(s)) {
-                return "both use section " + s.getId();
-            }
-        }
-        for (Map.Entry<Point, Boolean> e : requiredPointPositions.entrySet()) {
-            Boolean otherPos = other.requiredPosition(e.getKey());
-            if (otherPos != null && !otherPos.equals(e.getValue())) {
-                return "point " + e.getKey().getId() + " is needed "
-                        + Point.positionName(e.getValue()) + " but " + other.getId()
-                        + " needs it " + Point.positionName(otherPos);
-            }
-        }
-        return null;
+        return pointPositions.containsKey(point);
     }
 
     public boolean isActive() {
@@ -113,9 +75,6 @@ public class Route implements Serializable {
     }
 
     public void setTrainPosition(int trainPosition) {
-        if (trainPosition < NO_TRAIN || trainPosition >= sections.size()) {
-            throw new IllegalArgumentException("Invalid train position " + trainPosition);
-        }
         this.trainPosition = trainPosition;
     }
 
@@ -123,59 +82,55 @@ public class Route implements Serializable {
         return trainPosition != NO_TRAIN;
     }
 
-    /** One-line text such as "T1 -> T2 (P1 NORMAL)". */
-    public String getPathText() {
-        StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < sections.size(); i++) {
-            if (i > 0) {
-                sb.append(" -> ");
+    /**
+     * Two routes conflict if they share a section, or need the same point in
+     * different positions. Returns the reason, or null if they can both be set.
+     */
+    public String conflictWith(Route other) {
+        for (TrackSection section : sections) {
+            if (other.getSections().contains(section)) {
+                return "both use section " + section.getId();
             }
-            sb.append(sections.get(i).getId());
         }
-        if (!requiredPointPositions.isEmpty()) {
-            sb.append(" (");
-            boolean first = true;
-            for (Map.Entry<Point, Boolean> e : requiredPointPositions.entrySet()) {
-                if (!first) {
-                    sb.append(", ");
+        for (Point point : pointPositions.keySet()) {
+            if (other.usesPoint(point)) {
+                boolean mine = pointPositions.get(point);
+                boolean theirs = other.getPointPositions().get(point);
+                if (mine != theirs) {
+                    return "they need point " + point.getId() + " in different positions";
                 }
-                sb.append(e.getKey().getId()).append(' ').append(Point.positionName(e.getValue()));
-                first = false;
             }
-            sb.append(')');
         }
-        return sb.toString();
+        return null;
     }
 
-    /** Run-time state for display. */
+    /** e.g. "T1 -> T2, P1 NORMAL" */
+    public String getPathText() {
+        String text = "";
+        for (TrackSection section : sections) {
+            if (!text.isEmpty()) {
+                text = text + " -> ";
+            }
+            text = text + section.getId();
+        }
+        for (Point point : pointPositions.keySet()) {
+            text = text + ", " + point.getId() + " " + Point.positionName(pointPositions.get(point));
+        }
+        return text;
+    }
+
     public String getStateText() {
         if (!active) {
-            return "idle";
+            return "not set";
+        } else if (!hasTrain()) {
+            return "SET, train waiting at " + entrySignal.getId();
+        } else {
+            return "SET, train in " + sections.get(trainPosition).getId();
         }
-        if (!hasTrain()) {
-            return "set, train waiting at " + entrySignal.getId();
-        }
-        return "train in " + sections.get(trainPosition).getId();
-    }
-
-    @Override
-    public boolean equals(Object o) {
-        if (this == o) {
-            return true;
-        }
-        if (!(o instanceof Route)) {
-            return false;
-        }
-        return id.equals(((Route) o).id);
-    }
-
-    @Override
-    public int hashCode() {
-        return id.hashCode();
     }
 
     @Override
     public String toString() {
-        return id + " - " + description;
+        return id + "  " + description + "  (" + getPathText() + ")  " + getStateText();
     }
 }

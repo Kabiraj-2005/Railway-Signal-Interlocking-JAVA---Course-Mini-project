@@ -1,47 +1,42 @@
+/*
+ * AppConfig.java
+ * Reads the settings file app.properties (database URL, station name, log file name)
+ * once, when the class is first used, and hands the values out.
+ * Lecture decks: Properties, static blocks, I/O Streams.
+ * Owner: Harsh
+ */
 package com.trains.interlocking.util;
 
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.Properties;
 
-/**
- * Reads settings from {@code app.properties} on the classpath.
- * A JVM system property with the same key overrides the file (e.g. -Ddb.url=...).
- */
-public final class AppConfig {
+public class AppConfig {
 
-    private static final Properties PROPS = new Properties();
+    private static final Properties SETTINGS = new Properties();
 
+    // A static block runs once, the first time the class is used.
     static {
+        // app.properties is inside the program's classpath (src/main/resources),
+        // so we open it as a "resource" instead of with a file path.
         try (InputStream in = AppConfig.class.getResourceAsStream("/app.properties")) {
             if (in != null) {
-                PROPS.load(in);
+                SETTINGS.load(in);
             }
         } catch (IOException e) {
-            System.err.println("Could not read app.properties: " + e.getMessage());
+            System.out.println("Could not read app.properties: " + e.getMessage());
         }
-    }
-
-    private AppConfig() {
-    }
-
-    public static String get(String key, String defaultValue) {
-        String override = System.getProperty(key);
-        if (override != null && !override.isBlank()) {
-            return override;
-        }
-        return PROPS.getProperty(key, defaultValue);
     }
 
     public static String getDbUrl() {
-        return get("db.url", "jdbc:sqlite:interlocking.db");
+        return SETTINGS.getProperty("db.url", "jdbc:sqlite:interlocking.db");
     }
 
     public static String getStationName() {
-        return get("station.name", "Station");
+        return SETTINGS.getProperty("station.name", "Station");
     }
 
     public static String getLogFile() {
-        return get("log.file", "interlocking.log");
+        return SETTINGS.getProperty("log.file", "interlocking.log");
     }
 }

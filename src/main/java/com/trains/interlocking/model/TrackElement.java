@@ -1,12 +1,20 @@
+/*
+ * TrackElement.java
+ * The abstract parent class of every piece of the station: sections, points and signals.
+ * It holds what they all share (an id and a locked flag) and forces each child class
+ * to describe itself through two abstract methods.
+ * Lecture decks: Inheritance, Abstract Classes, Serialization.
+ * Owner: Utpal
+ *
+ * Note: we do NOT override equals()/hashCode(). The service, the DAOs and the snapshot
+ * loader all reuse the SAME objects from the one layout map, so Java's default
+ * "same object" comparison is exactly what we want.
+ */
 package com.trains.interlocking.model;
 
 import java.io.Serializable;
 import java.util.Objects;
 
-/**
- * Base class for every element of the station layout (sections, points, signals).
- * An element has a fixed id and can be locked by the interlocking while a route uses it.
- */
 public abstract class TrackElement implements Serializable {
 
     private static final long serialVersionUID = 1L;
@@ -15,7 +23,13 @@ public abstract class TrackElement implements Serializable {
     private boolean locked;
 
     protected TrackElement(String id) {
+        this(id, false);
+    }
+
+    // Used by the DAOs, which rebuild elements exactly as they were stored.
+    protected TrackElement(String id, boolean locked) {
         this.id = Objects.requireNonNull(id, "id must not be null");
+        this.locked = locked;
     }
 
     public String getId() {
@@ -34,34 +48,9 @@ public abstract class TrackElement implements Serializable {
         locked = false;
     }
 
-    /** Short type name for display, e.g. "Section", "Point", "Signal". */
-    public abstract String getType();
-
-    /** Human-readable state of this element, e.g. for display in the UI. */
+    /** Short state text for the screen, e.g. "occupied" or "NORMAL, locked". */
     public abstract String getStatus();
 
-    protected String lockText() {
-        return locked ? "LOCKED" : "unlocked";
-    }
-
-    @Override
-    public boolean equals(Object o) {
-        if (this == o) {
-            return true;
-        }
-        if (o == null || getClass() != o.getClass()) {
-            return false;
-        }
-        return id.equals(((TrackElement) o).id);
-    }
-
-    @Override
-    public int hashCode() {
-        return Objects.hash(getClass().getSimpleName(), id);
-    }
-
-    @Override
-    public String toString() {
-        return id;
-    }
+    /** Colour the UI paints this element in (each child class decides). */
+    public abstract String getDisplayColour();
 }

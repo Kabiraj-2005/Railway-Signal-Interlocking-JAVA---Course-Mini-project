@@ -1,3 +1,11 @@
+/*
+ * InterlockingService.java
+ * The "brain" of the project. It carries out every action (set, cancel, move train,
+ * manual controls) after SafetyRules has checked it, records each action in the event
+ * log, and saves the state through a StationStore. The GUI and tests only call this class.
+ * Lecture decks: Collections, Exception Handling, Logging.
+ * Owner: Utpal
+ */
 package com.trains.interlocking.service;
 
 import com.trains.interlocking.exception.PointLockedException;
@@ -6,434 +14,238 @@ import com.trains.interlocking.exception.SectionOccupiedException;
 import com.trains.interlocking.model.EventLogEntry;
 import com.trains.interlocking.model.Point;
 import com.trains.interlocking.model.Route;
-import com.trains.interlocking.model.Signal;
 import com.trains.interlocking.model.TrackElement;
 import com.trains.interlocking.model.TrackSection;
 
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
 import java.io.IOException;
-import java.io.ObjectInputStream;
-import java.io.ObjectOutputStream;
 import java.sql.SQLException;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
-import java.util.Collections;
-import java.util.Comparator;
-import java.util.HashSet;
-import java.util.LinkedHashMap;
+import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
-import java.util.Set;
 import java.util.logging.Logger;
 
-/**
- * Shared contract between the interlocking logic (Utpal), the database layer (Harsh)
- * and the UI (Aryan). The UI calls only these methods.
- *
- * <p>Interlocking rules enforced by this service:
- * <ul>
- *   <li>A route can be set only if all its sections are clear and unlocked and all
- *       its points can be moved to the required positions.</li>
- *   <li>Two routes conflict if they share a track section, or if they need the same
- *       point in different positions.</li>
- *   <li>A point cannot move while it is locked or while its section is occupied.</li>
- *   <li>Sections are released one by one as the train passes over them.</li>
- * </ul>
- */
 public class InterlockingService {
 
     private static final Logger LOG = Logger.getLogger(InterlockingService.class.getName());
 
-    private final Map<String, TrackElement> layout = new LinkedHashMap<>();
-    private final Map<String, Route> routes = new LinkedHashMap<>();
-    private final List<EventLogEntry> events = new ArrayList<>();
-    private final StationStore store;
+    private HashMap<String, TrackElement> layout;
+    private ArrayList<Route> routes;
+    private final ArrayList<EventLogEntry> events = new ArrayList<>();
+    private final StationStore store; // null = keep everything in memory only
 
-    /**
-     * @param layout all sections, points and signals, keyed by id
-     * @param routes all routes of the station (objects must come from {@code layout})
-     * @param store  where to persist state, or null for in-memory only
-     */
-    public InterlockingService(Map<String, TrackElement> layout, List<Route> routes, StationStore store) {
+    public InterlockingService(HashMap<String, TrackElement> layout, ArrayList<Route> routes,
+                               StationStore store) {
+        this.layout = layout;
+        this.routes = routes;
         this.store = store;
-        replaceState(layout, routes);
     }
 
-    // ------------------------------------------------------------------ route commands
-
-    /**
-     * Sets (locks) the given route and clears its entry signal.
-     * Must check that every section on the route is clear and unlocked, that the route
-     * does not conflict with any active route (shared section or same point needed in a
-     * different position), and that each required point can be moved. On success, moves
-     * the points, locks all sections and points, and clears the entry signal.
-     *
-     * @param routeId id of the route to set, e.g. "R1"
-     * @throws RouteConflictException    if the route conflicts with an active route
-     * @throws PointLockedException      if a required point is locked or cannot move
-     * @throws SectionOccupiedException  if any section on the route is occupied
-     */
     public void setRoute(String routeId)
             throws RouteConflictException, PointLockedException, SectionOccupiedException {
-        Route route = requireRoute(routeId);
+        Route route = findRoute(routeId);
         try {
-            checkCanSet(route);
-        } catch (RouteConflictException | PointLockedException | SectionOccupiedException e) {
-            record(routeId, "REFUSED", e.getMessage());
+            SafetyRules.checkRouteCanBeSet(route, routes);
+        } catch (RouteConflictException e) {
+            // Log the refusal, then pass the same exception on to the caller.
+            addToLog(routeId, "REFUSED", e.getMessage());
+            throw e;
+        } catch (PointLockedException e) {
+            addToLog(routeId, "REFUSED", e.getMessage());
+            throw e;
+        } catch (SectionOccupiedException e) {
+            addToLog(routeId, "REFUSED", e.getMessage());
             throw e;
         }
-
-        // All checks passed: move points, lock everything, clear the signal.
-        for (Map.Entry<Point, Boolean> e : route.getRequiredPointPositions().entrySet()) {
-            Point p = e.getKey();
-            p.setReversed(e.getValue()); // cannot fail: checked above
-            p.lock();
+        // Every check passed, so it is now safe to move the points and lock everything.
+        for (Point point : route.getPointPositions().keySet()) {
+            point.setReversed(route.getPointPositions().get(point));
+            point.lock();
         }
-        for (TrackSection s : route.getSections()) {
-            s.lock();
+        for (TrackSection section : route.getSections()) {
+            section.lock();
         }
         route.setActive(true);
         route.setTrainPosition(Route.NO_TRAIN);
         route.getEntrySignal().setClear(true);
-
-        persist();
-        record(routeId, "SET", route.getPathText() + ", " + route.getEntrySignal().getId() + " GREEN");
+        saveAndRecord(routeId, "SET", route.getPathText() + ", signal GREEN");
     }
 
-    /** Runs every interlocking check for {@link #setRoute} without changing anything. */
-    private void checkCanSet(Route route)
-            throws RouteConflictException, PointLockedException, SectionOccupiedException {
-        if (route.isActive()) {
-            throw new RouteConflictException("Route " + route.getId() + " is already set");
-        }
-        for (TrackSection s : route.getSections()) {
-            if (s.isOccupied()) {
-                throw new SectionOccupiedException("Cannot set " + route.getId()
-                        + ": section " + s.getId() + " is occupied");
-            }
-        }
-        for (Route active : getActiveRoutes()) {
-            String conflict = route.conflictWith(active);
-            if (conflict != null) {
-                throw new RouteConflictException("Cannot set " + route.getId()
-                        + ": conflicts with active route " + active.getId() + " (" + conflict + ")");
-            }
-        }
-        for (TrackSection s : route.getSections()) {
-            if (s.isLocked()) {
-                throw new RouteConflictException("Cannot set " + route.getId()
-                        + ": section " + s.getId() + " is locked");
-            }
-        }
-        for (Map.Entry<Point, Boolean> e : route.getRequiredPointPositions().entrySet()) {
-            Point p = e.getKey();
-            boolean mustMove = p.isReversed() != e.getValue();
-            if (mustMove) {
-                checkPointCanMove(p);
-            }
-        }
-    }
-
-    /**
-     * Cancels an active route: sets the entry signal back to red and releases every
-     * section and point still locked by the route. Only allowed while no train occupies it.
-     *
-     * @param routeId id of the active route to cancel
-     * @throws IllegalStateException if the route is not set or a train is on it
-     */
-    public void cancelRoute(String routeId) {
-        Route route = requireRoute(routeId);
+    public void cancelRoute(String routeId) throws RouteConflictException {
+        Route route = findRoute(routeId);
         if (!route.isActive()) {
             refuse(routeId, "Route " + routeId + " is not set");
         }
         if (route.hasTrain()) {
-            refuse(routeId, "Cannot cancel " + routeId + ": a train is on the route");
+            // Once the train has passed the signal, the driver relies on the route.
+            refuse(routeId, "A train is on route " + routeId + ", it cannot be cancelled");
         }
         route.getEntrySignal().setClear(false);
-        for (TrackSection s : route.getSections()) {
-            s.release();
+        for (TrackSection section : route.getSections()) {
+            section.release();
         }
         route.setActive(false);
         releasePoints(route);
-
-        persist();
-        record(routeId, "CANCEL", "Route cancelled, " + route.getEntrySignal().getId() + " RED");
+        saveAndRecord(routeId, "CANCEL", "Route cancelled, signal RED");
     }
 
-    /**
-     * Advances the train on the given route by one section per call.
-     * The entry signal returns to red as soon as the train enters the route. Each section
-     * the train leaves becomes unoccupied and is released; when the train leaves the last
-     * section the route is no longer active and its points are released.
-     *
-     * @param routeId id of the active route the train is travelling on
-     * @throws IllegalStateException if the route is not set
-     */
-    public void moveTrain(String routeId) {
-        Route route = requireRoute(routeId);
+    /** Moves the train one section forward. One call = one click in the GUI. */
+    public void moveTrain(String routeId) throws RouteConflictException {
+        Route route = findRoute(routeId);
         if (!route.isActive()) {
-            refuse(routeId, "Cannot move train: route " + routeId + " is not set");
+            refuse(routeId, "Route " + routeId + " is not set");
         }
-        List<TrackSection> sections = route.getSections();
-        int pos = route.getTrainPosition();
-        String message;
+        ArrayList<TrackSection> sections = route.getSections();
+        int position = route.getTrainPosition();
 
-        if (pos == Route.NO_TRAIN) {
+        if (position == Route.NO_TRAIN) {
+            // The train enters: the signal goes back to RED behind it.
             route.getEntrySignal().setClear(false);
             sections.get(0).setOccupied(true);
             route.setTrainPosition(0);
-            message = "Train passed " + route.getEntrySignal().getId() + " (now RED), entered "
-                    + sections.get(0).getId();
-        } else {
-            TrackSection left = sections.get(pos);
-            left.setOccupied(false);
-            left.release();
-            if (pos + 1 < sections.size()) {
-                TrackSection next = sections.get(pos + 1);
-                next.setOccupied(true);
-                route.setTrainPosition(pos + 1);
-                message = "Train left " + left.getId() + " (released), entered " + next.getId();
-            } else {
-                route.setTrainPosition(Route.NO_TRAIN);
-                route.setActive(false);
-                releasePoints(route);
-                message = "Train left " + left.getId() + " and the station, route completed";
-            }
-        }
-
-        persist();
-        record(routeId, "MOVE", message);
-    }
-
-    // ------------------------------------------------------------------ manual controls
-
-    /**
-     * Manually throws a point to its other position (signaller's individual control).
-     *
-     * @throws PointLockedException if the point is locked by a route or a section at the
-     *                              point is occupied
-     */
-    public void throwPoint(String pointId) throws PointLockedException {
-        TrackElement e = layout.get(pointId);
-        if (!(e instanceof Point)) {
-            throw new IllegalArgumentException("Unknown point: " + pointId);
-        }
-        Point p = (Point) e;
-        try {
-            checkPointCanMove(p);
-            p.setReversed(!p.isReversed());
-        } catch (PointLockedException ex) {
-            record("", "REFUSED", ex.getMessage());
-            throw ex;
-        }
-        persist();
-        record("", "POINT", p.getId() + " thrown to " + Point.positionName(p.isReversed()));
-    }
-
-    /**
-     * Simulates a track-circuit report, e.g. a stalled train or a fault. Only allowed on
-     * sections that no route has locked (the interlocking owns those).
-     *
-     * @throws IllegalStateException if the section is locked by a route
-     */
-    public void setSectionOccupied(String sectionId, boolean occupied) {
-        TrackElement e = layout.get(sectionId);
-        if (!(e instanceof TrackSection)) {
-            throw new IllegalArgumentException("Unknown section: " + sectionId);
-        }
-        TrackSection s = (TrackSection) e;
-        if (s.isLocked()) {
-            refuse("", "Section " + sectionId + " is locked by a route; its occupancy is controlled by the train");
-        }
-        if (s.isOccupied() == occupied) {
+            saveAndRecord(routeId, "MOVE", "Train entered " + sections.get(0).getId() + ", signal RED");
             return;
         }
-        s.setOccupied(occupied);
-        persist();
-        record("", "TRACK", sectionId + (occupied ? " reported OCCUPIED" : " reported clear"));
+        // The train leaves its section, which is freed straight away for other routes.
+        TrackSection leaving = sections.get(position);
+        leaving.setOccupied(false);
+        leaving.release();
+        if (position + 1 < sections.size()) {
+            TrackSection next = sections.get(position + 1);
+            next.setOccupied(true);
+            route.setTrainPosition(position + 1);
+            saveAndRecord(routeId, "MOVE", "Train left " + leaving.getId() + ", entered " + next.getId());
+        } else {
+            route.setTrainPosition(Route.NO_TRAIN);
+            route.setActive(false);
+            releasePoints(route);
+            saveAndRecord(routeId, "MOVE", "Train left the station, route finished");
+        }
     }
 
-    private void checkPointCanMove(Point p) throws PointLockedException {
-        if (p.isLocked()) {
-            throw new PointLockedException("Point " + p.getId() + " is locked in "
-                    + Point.positionName(p.isReversed()) + " by an active route");
+    public void throwPoint(String pointId) throws PointLockedException {
+        Point point = (Point) layout.get(pointId);
+        try {
+            SafetyRules.checkPointCanMove(point, routes);
+            point.setReversed(!point.isReversed());
+        } catch (PointLockedException e) {
+            addToLog("", "REFUSED", e.getMessage());
+            throw e;
         }
-        for (TrackSection s : sectionsAtPoint(p)) {
-            if (s.isOccupied()) {
-                throw new PointLockedException("Point " + p.getId()
-                        + " cannot move: section " + s.getId() + " at the point is occupied");
-            }
+        saveAndRecord("", "POINT", pointId + " moved to " + Point.positionName(point.isReversed()));
+    }
+
+    /** Pretends a track circuit reported a train (or a fault) on a section. */
+    public void setSectionOccupied(String sectionId, boolean occupied) throws SectionOccupiedException {
+        TrackSection section = (TrackSection) layout.get(sectionId);
+        if (section.isLocked()) {
+            // A locked section belongs to a route; only the train may change it.
+            String message = "Section " + sectionId + " is locked by a route";
+            addToLog("", "REFUSED", message);
+            throw new SectionOccupiedException(message);
         }
+        section.setOccupied(occupied);
+        saveAndRecord("", "TRACK", sectionId + (occupied ? " marked occupied" : " marked clear"));
     }
 
     /**
-     * The section a point lies in: the section shared by every route through the point
-     * (P1 lies in T1, P2 in T4). A train standing there is over the point.
+     * Unlocks a route's points. No other active route can need them: the two routes
+     * through a point always share its section, so they can never both be set.
      */
-    private Set<TrackSection> sectionsAtPoint(Point p) {
-        Set<TrackSection> result = null;
-        for (Route r : routes.values()) {
-            if (r.usesPoint(p)) {
-                if (result == null) {
-                    result = new HashSet<>(r.getSections());
-                } else {
-                    result.retainAll(r.getSections());
-                }
-            }
-        }
-        return result == null ? new HashSet<>() : result;
-    }
-
-    /** Releases a route's points unless another active route still needs them. */
     private void releasePoints(Route finished) {
-        for (Point p : finished.getRequiredPointPositions().keySet()) {
-            boolean stillNeeded = false;
-            for (Route other : routes.values()) {
-                if (other != finished && other.isActive() && other.usesPoint(p)) {
-                    stillNeeded = true;
-                }
-            }
-            if (!stillNeeded) {
-                p.release();
-            }
+        for (Point point : finished.getPointPositions().keySet()) {
+            point.release();
         }
     }
 
-    // ------------------------------------------------------------------ queries
-
-    /**
-     * @return the routes that are currently set (locked)
-     */
-    public List<Route> getActiveRoutes() {
-        List<Route> active = new ArrayList<>();
-        for (Route r : routes.values()) {
-            if (r.isActive()) {
-                active.add(r);
+    public ArrayList<Route> getActiveRoutes() {
+        ArrayList<Route> active = new ArrayList<>();
+        for (Route route : routes) {
+            if (route.isActive()) {
+                active.add(route);
             }
         }
         return active;
     }
 
-    /**
-     * @return every element of the station layout (sections, points, signals), keyed by id
-     */
-    public Map<String, TrackElement> getLayout() {
-        return Collections.unmodifiableMap(layout);
+    // Copies are returned so that callers cannot add or remove items from our lists.
+    public ArrayList<Route> getRoutes() {
+        return new ArrayList<>(routes);
     }
 
-    /** @return every route of the station, active or not, sorted by id. */
-    public List<Route> getRoutes() {
-        List<Route> list = new ArrayList<>(routes.values());
-        list.sort(Comparator.comparing(Route::getId));
-        return list;
+    public HashMap<String, TrackElement> getLayout() {
+        return new HashMap<>(layout);
     }
 
+    public ArrayList<EventLogEntry> getEventLog() {
+        return new ArrayList<>(events);
+    }
+
+    /** Returns the route with this id, or null if there is none. */
     public Route getRoute(String routeId) {
-        return routes.get(routeId);
+        for (Route route : routes) {
+            if (route.getId().equals(routeId)) {
+                return route;
+            }
+        }
+        return null;
     }
 
-    /** @return the event log of this session (and any history added with {@link #addHistory}). */
-    public List<EventLogEntry> getEventLog() {
-        return Collections.unmodifiableList(events);
-    }
-
-    /** Prepends older events, e.g. loaded from the database at start-up. */
+    /** Adds older events (loaded from the database) to the front of the log. */
     public void addHistory(List<EventLogEntry> history) {
         events.addAll(0, history);
     }
 
-    // ------------------------------------------------------------------ serialization
-
-    /** Saves the complete station state (layout + routes) to a file. */
-    public void saveSnapshot(File file) throws IOException {
-        try (ObjectOutputStream out = new ObjectOutputStream(new FileOutputStream(file))) {
-            // one stream, so routes keep pointing at the same element objects
-            out.writeObject(new LinkedHashMap<>(layout));
-            out.writeObject(new ArrayList<>(routes.values()));
-        }
-        LOG.info("Snapshot saved to " + file.getAbsolutePath());
-        record("", "SNAPSHOT", "Saved to " + file.getName());
+    public void saveSnapshot(String fileName) throws IOException {
+        SnapshotFile.save(fileName, layout, routes);
+        addToLog("", "SNAPSHOT", "Saved to " + fileName);
     }
 
-    /** Replaces the station state with one previously written by {@link #saveSnapshot}. */
-    public void loadSnapshot(File file) throws IOException {
-        Map<String, TrackElement> newLayout = new LinkedHashMap<>();
-        List<Route> newRoutes = new ArrayList<>();
-        try (ObjectInputStream in = new ObjectInputStream(new FileInputStream(file))) {
-            Object layoutObj = in.readObject();
-            Object routesObj = in.readObject();
-            if (!(layoutObj instanceof Map) || !(routesObj instanceof List)) {
-                throw new IOException("Not an interlocking snapshot: " + file.getName());
-            }
-            for (Map.Entry<?, ?> e : ((Map<?, ?>) layoutObj).entrySet()) {
-                if (!(e.getValue() instanceof TrackElement)) {
-                    throw new IOException("Corrupt snapshot: bad layout entry " + e.getKey());
-                }
-                TrackElement el = (TrackElement) e.getValue();
-                newLayout.put(el.getId(), el);
-            }
-            for (Object o : (List<?>) routesObj) {
-                if (!(o instanceof Route)) {
-                    throw new IOException("Corrupt snapshot: bad route entry");
-                }
-                newRoutes.add((Route) o);
-            }
-        } catch (ClassNotFoundException e) {
-            throw new IOException("Snapshot uses unknown classes", e);
-        }
-        replaceState(newLayout, newRoutes);
-        persist();
-        LOG.info("Snapshot loaded from " + file.getAbsolutePath());
-        record("", "SNAPSHOT", "Loaded from " + file.getName());
+    public void loadSnapshot(String fileName) throws IOException, ClassNotFoundException {
+        HashMap<String, TrackElement> newLayout = new HashMap<>();
+        ArrayList<Route> newRoutes = new ArrayList<>();
+        SnapshotFile.load(fileName, newLayout, newRoutes);
+        // Only replace the state once the whole file was read without errors.
+        layout = newLayout;
+        routes = newRoutes;
+        saveAndRecord("", "SNAPSHOT", "Loaded from " + fileName);
     }
 
-    private void replaceState(Map<String, TrackElement> newLayout, List<Route> newRoutes) {
-        layout.clear();
-        layout.putAll(newLayout);
-        routes.clear();
-        for (Route r : newRoutes) {
-            routes.put(r.getId(), r);
-        }
-    }
-
-    // ------------------------------------------------------------------ helpers
-
-    private Route requireRoute(String routeId) {
-        Route route = routes.get(routeId);
+    private Route findRoute(String routeId) throws RouteConflictException {
+        Route route = getRoute(routeId);
         if (route == null) {
-            throw new IllegalArgumentException("Unknown route: " + routeId);
+            throw new RouteConflictException("There is no route called " + routeId);
         }
         return route;
     }
 
-    private void refuse(String routeId, String message) {
-        record(routeId, "REFUSED", message);
-        throw new IllegalStateException(message);
+    private void refuse(String routeId, String message) throws RouteConflictException {
+        addToLog(routeId, "REFUSED", message);
+        throw new RouteConflictException(message);
     }
 
-    private void record(String routeId, String action, String message) {
-        EventLogEntry entry = new EventLogEntry(LocalDateTime.now(), routeId, action, message);
+    private void saveAndRecord(String routeId, String action, String message) {
+        if (store != null) {
+            try {
+                store.saveState(new ArrayList<>(layout.values()), routes);
+            } catch (SQLException e) {
+                // The interlocking keeps working in memory even if the database fails.
+                LOG.severe("Could not save state: " + e.getMessage());
+            }
+        }
+        addToLog(routeId, action, message);
+    }
+
+    private void addToLog(String routeId, String action, String message) {
+        EventLogEntry entry = new EventLogEntry(LocalDateTime.now().withNano(0), routeId, action, message);
         events.add(entry);
-        LOG.info("[" + action + "] " + entry.getRouteId() + " " + message);
+        LOG.info(action + " " + routeId + " " + message);
         if (store != null) {
             try {
                 store.logEvent(entry);
             } catch (SQLException e) {
-                LOG.warning("Could not write event to database: " + e.getMessage());
+                LOG.warning("Could not write event: " + e.getMessage());
             }
-        }
-    }
-
-    private void persist() {
-        if (store == null) {
-            return;
-        }
-        try {
-            store.saveState(layout.values(), routes.values());
-        } catch (SQLException e) {
-            LOG.severe("Could not save state to database: " + e.getMessage());
         }
     }
 }

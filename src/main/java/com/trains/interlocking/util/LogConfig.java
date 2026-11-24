@@ -1,42 +1,38 @@
+/*
+ * LogConfig.java
+ * Sets up java.util.logging so that every message from our packages is written to
+ * the log file named in app.properties (interlocking.log).
+ * Lecture decks: Logging (Logger, FileHandler, SimpleFormatter, Level).
+ * Owner: Utpal
+ */
 package com.trains.interlocking.util;
 
 import java.io.IOException;
 import java.util.logging.FileHandler;
-import java.util.logging.Handler;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.logging.SimpleFormatter;
 
-/**
- * Configures java.util.logging so that everything under {@code com.trains.interlocking}
- * is also written to the log file named in app.properties.
- */
-public final class LogConfig {
+public class LogConfig {
 
-    private static final String ROOT_LOGGER = "com.trains.interlocking";
-    private static boolean configured;
+    // Kept in a static field so the logger (and its file handler) is not garbage collected.
+    private static final Logger APP_LOGGER = Logger.getLogger("com.trains.interlocking");
+    private static boolean configured = false;
 
-    private LogConfig() {
-    }
-
-    public static synchronized void configure() {
+    public static void configure() {
         if (configured) {
-            return;
+            return; // only add the file handler once
         }
-        System.setProperty("java.util.logging.SimpleFormatter.format",
-                "%1$tF %1$tT %4$-7s %3$s - %5$s%6$s%n");
-        // keep the console for real problems, the file gets everything
-        for (Handler h : Logger.getLogger("").getHandlers()) {
-            h.setLevel(Level.WARNING);
-        }
-        Logger logger = Logger.getLogger(ROOT_LOGGER);
-        logger.setLevel(Level.INFO);
+        APP_LOGGER.setLevel(Level.INFO);
+        // Loggers of our classes (e.g. ...service.InterlockingService) are "children"
+        // of this logger, so their messages also reach this handler.
+        APP_LOGGER.setUseParentHandlers(false); // file only, keep the console clean
         try {
-            FileHandler handler = new FileHandler(AppConfig.getLogFile(), true);
-            handler.setFormatter(new SimpleFormatter());
-            logger.addHandler(handler);
+            FileHandler fileHandler = new FileHandler(AppConfig.getLogFile(), true); // true = append
+            fileHandler.setFormatter(new SimpleFormatter());
+            APP_LOGGER.addHandler(fileHandler);
         } catch (IOException e) {
-            logger.warning("Could not open log file: " + e.getMessage());
+            System.out.println("Could not open log file: " + e.getMessage());
         }
         configured = true;
     }

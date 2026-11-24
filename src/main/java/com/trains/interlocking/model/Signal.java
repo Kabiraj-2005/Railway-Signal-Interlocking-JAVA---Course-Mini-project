@@ -1,18 +1,25 @@
+/*
+ * Signal.java
+ * A signal at the entrance of a route: RED means stop, GREEN means the route
+ * is set and the train may enter.
+ * Lecture decks: Inheritance, Method Overriding.
+ * Owner: Utpal
+ */
 package com.trains.interlocking.model;
 
-/**
- * Controls entry to a route. Red (stop) by default; green only while a route is set
- * and the train has not yet entered it.
- */
 public class Signal extends TrackElement {
 
     private static final long serialVersionUID = 1L;
 
-    /** false = red, true = green. */
-    private boolean clear;
+    private boolean clear; // false = RED, true = GREEN
 
     public Signal(String id) {
         super(id);
+    }
+
+    public Signal(String id, boolean clear) {
+        super(id);
+        this.clear = clear;
     }
 
     public boolean isClear() {
@@ -24,12 +31,18 @@ public class Signal extends TrackElement {
     }
 
     @Override
-    public String getType() {
-        return "Signal";
+    public String getStatus() {
+        if (clear) {
+            return "GREEN";
+        }
+        return "RED";
     }
 
     @Override
-    public String getStatus() {
-        return clear ? "GREEN" : "RED";
+    public String getDisplayColour() {
+        if (clear) {
+            return "#43a047"; // green
+        }
+        return "#e53935"; // red
     }
 }

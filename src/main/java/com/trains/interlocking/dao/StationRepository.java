@@ -1,3 +1,11 @@
+/*
+ * StationRepository.java
+ * Loads the whole station from the database at start-up, and saves its state after
+ * every change in ONE transaction (all rows are saved, or none are).
+ * It implements the StationStore interface, so the service never sees any SQL.
+ * Lecture decks: JDBC transactions (setAutoCommit, commit, rollback), DAO pattern, Interfaces.
+ * Owner: Harsh
+ */
 package com.trains.interlocking.dao;
 
 import com.trains.interlocking.model.EventLogEntry;
@@ -10,15 +18,10 @@ import com.trains.interlocking.service.StationStore;
 
 import java.sql.Connection;
 import java.sql.SQLException;
-import java.util.Collection;
-import java.util.LinkedHashMap;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 
-/**
- * Loads the whole station from the database and saves its state back, using the DAOs.
- * Saving runs in one transaction so the stored layout is never half-updated.
- */
 public class StationRepository implements StationStore {
 
     private final Connection conn;
@@ -35,50 +38,48 @@ public class StationRepository implements StationStore {
         this.eventLogDao = new EventLogDao(conn);
     }
 
-    /** @return every section, point and signal keyed by id. */
-    public Map<String, TrackElement> loadLayout() throws SQLException {
-        Map<String, TrackElement> layout = new LinkedHashMap<>();
-        for (TrackSection s : sectionDao.findAll()) {
-            layout.put(s.getId(), s);
+    public HashMap<String, TrackElement> loadLayout() throws SQLException {
+        HashMap<String, TrackElement> layout = new HashMap<>();
+        for (TrackSection section : sectionDao.findAll()) {
+            layout.put(section.getId(), section);
         }
-        for (Point p : pointDao.findAll()) {
-            layout.put(p.getId(), p);
+        for (Point point : pointDao.findAll()) {
+            layout.put(point.getId(), point);
         }
-        for (Signal s : signalDao.findAll()) {
-            layout.put(s.getId(), s);
+        for (Signal signal : signalDao.findAll()) {
+            layout.put(signal.getId(), signal);
         }
         return layout;
     }
 
-    /** Loads routes, resolving their elements against the given layout. */
-    public List<Route> loadRoutes(Map<String, TrackElement> layout) throws SQLException {
-        return new RouteDao(conn, layout).findAll();
+    public ArrayList<Route> loadRoutes(HashMap<String, TrackElement> layout) throws SQLException {
+        return new ArrayList<>(new RouteDao(conn, layout).findAll());
     }
 
     @Override
-    public void saveState(Collection<TrackElement> elements, Collection<Route> routes) throws SQLException {
-        boolean oldAutoCommit = conn.getAutoCommit();
-        conn.setAutoCommit(false);
+    public void saveState(List<TrackElement> elements, List<Route> routes) throws SQLException {
+        conn.setAutoCommit(false); // start the transaction
         try {
-            for (TrackElement e : elements) {
-                if (e instanceof TrackSection) {
-                    sectionDao.update((TrackSection) e);
-                } else if (e instanceof Point) {
-                    pointDao.update((Point) e);
-                } else if (e instanceof Signal) {
-                    signalDao.update((Signal) e);
+            for (TrackElement element : elements) {
+                // Each kind of element lives in its own table, so pick the matching DAO.
+                if (element instanceof TrackSection) {
+                    sectionDao.update((TrackSection) element);
+                } else if (element instanceof Point) {
+                    pointDao.update((Point) element);
+                } else {
+                    signalDao.update((Signal) element);
                 }
             }
-            RouteDao routeDao = new RouteDao(conn, null);
-            for (Route r : routes) {
-                routeDao.updateState(r);
+            RouteDao routeDao = new RouteDao(conn, null); // update() needs no layout
+            for (Route route : routes) {
+                routeDao.update(route);
             }
-            conn.commit();
+            conn.commit(); // everything worked: make it permanent
         } catch (SQLException e) {
-            conn.rollback();
+            conn.rollback(); // something failed: undo every change since setAutoCommit(false)
             throw e;
         } finally {
-            conn.setAutoCommit(oldAutoCommit);
+            conn.setAutoCommit(true);
         }
     }
 

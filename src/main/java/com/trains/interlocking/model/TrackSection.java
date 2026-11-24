@@ -1,26 +1,25 @@
+/*
+ * TrackSection.java
+ * A block of track that a train can occupy. In a real railway a "track circuit"
+ * detects the train; here the occupied flag plays that role.
+ * Lecture decks: Inheritance (extends, super), Method Overriding.
+ * Owner: Utpal
+ */
 package com.trains.interlocking.model;
 
-/**
- * A block of track that a train can occupy. Occupancy is what a track circuit reports.
- */
 public class TrackSection extends TrackElement {
 
     private static final long serialVersionUID = 1L;
 
-    private final String description;
     private boolean occupied;
 
     public TrackSection(String id) {
-        this(id, "");
-    }
-
-    public TrackSection(String id, String description) {
         super(id);
-        this.description = description == null ? "" : description;
     }
 
-    public String getDescription() {
-        return description;
+    public TrackSection(String id, boolean occupied, boolean locked) {
+        super(id, locked);
+        this.occupied = occupied;
     }
 
     public boolean isOccupied() {
@@ -32,12 +31,24 @@ public class TrackSection extends TrackElement {
     }
 
     @Override
-    public String getType() {
-        return "Section";
+    public String getStatus() {
+        if (occupied) {
+            return "occupied";
+        } else if (isLocked()) {
+            return "locked";
+        } else {
+            return "free";
+        }
     }
 
     @Override
-    public String getStatus() {
-        return (occupied ? "OCCUPIED" : "clear") + ", " + lockText();
+    public String getDisplayColour() {
+        if (occupied) {
+            return "#e53935"; // red
+        } else if (isLocked()) {
+            return "#fdd835"; // yellow
+        } else {
+            return "#bdbdbd"; // grey
+        }
     }
 }

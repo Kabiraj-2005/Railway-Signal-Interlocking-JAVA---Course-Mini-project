@@ -47,18 +47,21 @@ This is a desktop app built with Java 21, JDBC (SQLite) and JavaFX.
 
 ```
 src/main/java/com/trains/interlocking/
-├── Main.java              console test harness (54 checks, exits 1 on failure)
+├── Main.java              console test harness (15 scenarios, prints PASS/FAIL and a total)
 ├── model/                 TrackElement, TrackSection, Point, Signal, Route, EventLogEntry
-├── service/               InterlockingService, StationStore (persistence hook), StationFactory
+├── service/               InterlockingService (actions), SafetyRules (checks),
+│                          SnapshotFile (serialization), StationFactory, StationStore
 ├── dao/                   Dao<T> + TrackSectionDao, PointDao, SignalDao, RouteDao,
 │                          EventLogDao, StationRepository (implements StationStore)
 ├── exception/             PointLockedException, RouteConflictException, SectionOccupiedException
 ├── util/                  AppConfig, DatabaseConnection, LogConfig
-└── ui/                    MainApp (JavaFX), TrackDiagram, Launcher
+└── ui/                    MainApp (JavaFX), Launcher
 src/main/resources/
 ├── app.properties         db.url, station.name, log.file
-└── schema.sql             database schema + seed data for the demo station
+└── schema.sql             tables + starting data for the demo station
 ```
+
+See `STUDY_GUIDE.md` for a walkthrough of every file and `CHANGES.md` for what changed.
 
 ## How it works
 
@@ -67,23 +70,23 @@ src/main/resources/
 - **Train movement:** the first "Move train" puts the train in the first section and turns the
   entry signal red. Each later move clears and releases the section behind the train. After the
   last section the route ends and its points are released.
-- **Cancel:** only allowed while the train is still waiting at the signal.
-- **Persistence:** every change is saved to SQLite in one transaction (element states, plus each
-  route's active flag and train position), and every action goes into `event_log`.
-  Restarting the app restores the exact state. Delete `interlocking.db` to reset the station.
-- **Serialization:** the "Snapshot file" Save/Load buttons write/read the full station
-  (layout + routes) with `ObjectOutputStream`.
-- **Logging:** `java.util.logging` writes to the file named by `log.file`.
+- **Refusals:** every refused request throws one of the three checked exceptions
+  (cancel/move problems use `RouteConflictException`, locked sections use `SectionOccupiedException`).
+- **Persistence:** after every change the whole state is saved to SQLite in ONE transaction,
+  and every action is added to `event_log`. Restarting the app restores the exact state.
+  Delete `interlocking.db` to reset the station.
+- **Snapshot:** "Save snapshot" / "Load snapshot" write and read the station with
+  `ObjectOutputStream` / `ObjectInputStream`.
+- **Logging:** `java.util.logging` writes to the file named by `log.file` (`interlocking.log`).
 
 ### Using the UI
 
+- The coloured row shows the track: grey = free, yellow = locked by a route, red = occupied;
+  signals are green or red.
 - Pick a route, then **Set route**, **Move train one section** or **Cancel route**.
-- Click a track section in the diagram (or use the *Track circuits* checkbox) to mark it
-  occupied, which simulates a stalled train or a track fault.
-- Click a point (or use **Throw point**) to move it by hand.
+- **Throw point** moves the chosen point by hand.
+- **Mark occupied / Mark clear** pretends a train (or a fault) is on a section.
 - Refused requests appear in a dialog and in the event log.
-
-Settings in `app.properties` can be overridden on the command line, e.g. `-Ddb.url=jdbc:sqlite:test.db`.
 
 ## Requirements
 
