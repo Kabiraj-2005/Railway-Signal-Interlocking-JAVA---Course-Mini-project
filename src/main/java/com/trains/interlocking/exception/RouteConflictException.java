@@ -5,6 +5,8 @@ package com.trains.interlocking.exception;
  */
 public class RouteConflictException extends Exception {
 
+    private static final long serialVersionUID = 1L;
+
     public RouteConflictException(String message) {
         super(message);
     }

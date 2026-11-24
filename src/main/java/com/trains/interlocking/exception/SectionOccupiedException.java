@@ -5,6 +5,8 @@ package com.trains.interlocking.exception;
  */
 public class SectionOccupiedException extends Exception {
 
+    private static final long serialVersionUID = 1L;
+
     public SectionOccupiedException(String message) {
         super(message);
     }

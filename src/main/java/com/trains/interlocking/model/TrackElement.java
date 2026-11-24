@@ -34,6 +34,34 @@ public abstract class TrackElement implements Serializable {
         locked = false;
     }
 
+    /** Short type name for display, e.g. "Section", "Point", "Signal". */
+    public abstract String getType();
+
     /** Human-readable state of this element, e.g. for display in the UI. */
     public abstract String getStatus();
+
+    protected String lockText() {
+        return locked ? "LOCKED" : "unlocked";
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) {
+            return true;
+        }
+        if (o == null || getClass() != o.getClass()) {
+            return false;
+        }
+        return id.equals(((TrackElement) o).id);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(getClass().getSimpleName(), id);
+    }
+
+    @Override
+    public String toString() {
+        return id;
+    }
 }

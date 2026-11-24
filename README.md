@@ -47,17 +47,43 @@ This is a desktop app built with Java 21, JDBC (SQLite) and JavaFX.
 
 ```
 src/main/java/com/trains/interlocking/
-├── Main.java              console test harness
-├── model/                 TrackElement, TrackSection, Point, Signal, Route
-├── service/               InterlockingService (shared contract)
-├── dao/                   Dao<T> generic interface + implementations
+├── Main.java              console test harness (54 checks, exits 1 on failure)
+├── model/                 TrackElement, TrackSection, Point, Signal, Route, EventLogEntry
+├── service/               InterlockingService, StationStore (persistence hook), StationFactory
+├── dao/                   Dao<T> + TrackSectionDao, PointDao, SignalDao, RouteDao,
+│                          EventLogDao, StationRepository (implements StationStore)
 ├── exception/             PointLockedException, RouteConflictException, SectionOccupiedException
-├── util/                  DatabaseConnection
-└── ui/                    MainApp (JavaFX), Launcher
+├── util/                  AppConfig, DatabaseConnection, LogConfig
+└── ui/                    MainApp (JavaFX), TrackDiagram, Launcher
 src/main/resources/
 ├── app.properties         db.url, station.name, log.file
-└── schema.sql             database schema
+└── schema.sql             database schema + seed data for the demo station
 ```
+
+## How it works
+
+- **Point zone:** a point lies in the section shared by every route through it
+  (P1 in T1, P2 in T4). A point cannot move while it is locked or while that section is occupied.
+- **Train movement:** the first "Move train" puts the train in the first section and turns the
+  entry signal red. Each later move clears and releases the section behind the train. After the
+  last section the route ends and its points are released.
+- **Cancel:** only allowed while the train is still waiting at the signal.
+- **Persistence:** every change is saved to SQLite in one transaction (element states, plus each
+  route's active flag and train position), and every action goes into `event_log`.
+  Restarting the app restores the exact state. Delete `interlocking.db` to reset the station.
+- **Serialization:** the "Snapshot file" Save/Load buttons write/read the full station
+  (layout + routes) with `ObjectOutputStream`.
+- **Logging:** `java.util.logging` writes to the file named by `log.file`.
+
+### Using the UI
+
+- Pick a route, then **Set route**, **Move train one section** or **Cancel route**.
+- Click a track section in the diagram (or use the *Track circuits* checkbox) to mark it
+  occupied, which simulates a stalled train or a track fault.
+- Click a point (or use **Throw point**) to move it by hand.
+- Refused requests appear in a dialog and in the event log.
+
+Settings in `app.properties` can be overridden on the command line, e.g. `-Ddb.url=jdbc:sqlite:test.db`.
 
 ## Requirements
 

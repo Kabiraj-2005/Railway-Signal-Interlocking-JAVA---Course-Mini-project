@@ -5,6 +5,8 @@ package com.trains.interlocking.exception;
  */
 public class PointLockedException extends Exception {
 
+    private static final long serialVersionUID = 1L;
+
     public PointLockedException(String message) {
         super(message);
     }

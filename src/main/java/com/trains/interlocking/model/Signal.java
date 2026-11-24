@@ -1,18 +1,35 @@
 package com.trains.interlocking.model;
 
-/*
- * TODO (Utpal): Signal — controls entry to a route.
- *  - private boolean clear (false = red, true = green), with isClear() / setClear(boolean).
- *  - getStatus(): describe RED/GREEN.
+/**
+ * Controls entry to a route. Red (stop) by default; green only while a route is set
+ * and the train has not yet entered it.
  */
 public class Signal extends TrackElement {
+
+    private static final long serialVersionUID = 1L;
+
+    /** false = red, true = green. */
+    private boolean clear;
 
     public Signal(String id) {
         super(id);
     }
 
+    public boolean isClear() {
+        return clear;
+    }
+
+    public void setClear(boolean clear) {
+        this.clear = clear;
+    }
+
+    @Override
+    public String getType() {
+        return "Signal";
+    }
+
     @Override
     public String getStatus() {
-        return "TODO";
+        return clear ? "GREEN" : "RED";
     }
 }
